@@ -42,15 +42,41 @@ function askQuestion(query) {
   console.log('  4. 把地址栏中的数字 ID 粘贴回此终端');
   console.log('  5. 会话数据会自动保存，关闭浏览器即可\n');
 
+  // 自动检测 Chrome 路径
+  const possiblePaths = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe',
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+  ].filter(Boolean);
+
+  let executablePath;
+  for (const p of possiblePaths) {
+    if (p && fs.existsSync(p)) {
+      executablePath = p;
+      break;
+    }
+  }
+
+  if (executablePath) {
+    console.log(`检测到 Chrome: ${executablePath}`);
+  } else {
+    console.log('未找到系统 Chrome，将使用 Puppeteer 内置浏览器');
+  }
+
   // 启动有界面的浏览器
-  const browser = await puppeteer.launch({
+  const launchOptions = {
     headless: false,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
     ],
-  });
+  };
+  if (executablePath) {
+    launchOptions.executablePath = executablePath;
+  }
+  const browser = await puppeteer.launch(launchOptions);
 
   const page = await browser.newPage();
 
