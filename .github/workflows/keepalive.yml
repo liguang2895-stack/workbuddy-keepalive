@@ -1,38 +1,33 @@
 # ============================================
-# WorkBuddy KeepAlive - GitHub Actions 工作流
+# WorkBuddy KeepAlive - GitHub Actions 长期保活
 # ============================================
-# 每 10 分钟启动一次 Chromium 浏览器，打开 WorkBuddy AI 对话页面，
-# 保持 WebSocket 连接活跃，防止服务器因空闲而休眠。
+# 原理：
+#   - 公开仓库单次 Actions 运行最长 72 小时
+#   - 脚本内部自循环：每 10 分钟打开浏览器保活一次
+#   - 中途不依赖 GitHub schedule（它不可靠）
+#   - 脚本运行 70 小时后自动触发新的 workflow_dispatch
+#     实现无缝接力，理论上可以永久运行
 #
-# 前置条件：
-#   1. 在本地运行 npm run login 完成微信扫码登录
-#   2. 运行 npm run session-export 导出会话数据
-#   3. 添加 GitHub Secrets：
-#      - SESSION_DATA: 粘贴 session-export 输出的内容
-#      - TASK_ID: 你的会话数字 ID
-#   4. 仓库已设为 Public（免费用户无限 Actions 分钟数）
+# 首次使用：
+#   1. 仓库已设为 Public（免费无限 Actions 分钟数）
+#   2. 确保已添加 Secrets: SESSION_DATA, TASK_ID
+#   3. 进 Actions 标签页 → 点 Run workflow → 开始保活
 # ============================================
 
 name: WorkBuddy KeepAlive
 
 on:
-  schedule:
-    # 每 10 分钟运行一次（服务器 15 分钟才休眠，10 分钟间隔安全）
-    - cron: '*/10 * * * *'
+  push:
+    branches: [ master ]
   workflow_dispatch:
-
-# 防止多个并发运行（如果前一个还没结束，排队等）
-concurrency:
-  group: keepalive-browser
-  cancel-in-progress: false
 
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 5  # 每次最多运行 5 分钟
+    timeout-minutes: 4320  # 72 小时（公开仓库上限）
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -40,13 +35,29 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Puppeteer
+      - name: Install Puppeteer + Chromium
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq chromium-browser > /dev/null 2>&1
           npm init -y
           npm install puppeteer-core
 
-      - name: Run browser keepalive
+      - name: Start browser keepalive loop
         env:
           SESSION_DATA: ${{ secrets.SESSION_DATA }}
           TASK_ID: ${{ secrets.TASK_ID }}
-        run: node keepalive-browser.js
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # 在后台运行一个监视器，69 小时后触发自动重启
+          (
+            sleep 248400  # 69 小时 = 248400 秒
+            echo "--- 69 小时到，触发自动重启 ---"
+            curl -s -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$GH_REPO/actions/workflows/keepalive.yml/dispatches" \
+              -d '{"ref":"master"}'
+          ) &
+
+          node keepalive-browser.js
