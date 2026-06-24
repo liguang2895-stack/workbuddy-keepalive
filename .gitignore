@@ -1,6 +1,8 @@
 node_modules/
 .env
 chrome-user-data/
+*.png
+登录页.html
 
 # session-data.json 包含你的登录凭证，
 # 建议使用 GitHub Secrets 而非提交到代码仓库
