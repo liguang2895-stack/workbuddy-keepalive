@@ -4,40 +4,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  diagnose:
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install Chromium
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq chromium-browser xvfb > /dev/null 2>&1
-          npm init -y
-          npm install puppeteer-core
-
-      - name: Run diagnosis (xvfb)
-        env:
-          SESSION_DATA: ${{ secrets.SESSION_DATA }}
-          TASK_ID: ${{ secrets.TASK_ID }}
-        run: xvfb-run --auto-servernum node diagnose.js
-
-      - name: Upload screenshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: diagnosis-screenshot
-          path: diagnosis.png
-          if-no-files-found: warn
-
   keepalive:
-    needs: diagnose
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,10 +20,21 @@ jobs:
           npm init -y
           npm install puppeteer-core
 
-      - name: Start keepalive (xvfb + non-headless)
+      - name: 二维码登录 + 持续保活
         env:
-          SESSION_DATA: ${{ secrets.SESSION_DATA }}
           TASK_ID: ${{ secrets.TASK_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: xvfb-run --auto-servernum node keepalive-browser.js
+
+      - name: 上传二维码和登录态（即使失败也上传）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepalive-data
+          path: |
+            qrcode.png
+            qrcode-url.txt
+            session-data.json
+            login-timeout.png
+          if-no-files-found: ignore

@@ -1,14 +1,11 @@
 {
   "name": "workbuddy-keepalive",
-  "version": "1.0.0",
-  "description": "WorkBuddy 保活工具 - 保持 AI 对话服务器不会因空闲而休眠",
+  "version": "2.0.0",
+  "description": "WorkBuddy 保活工具 - 二维码登录 + 浏览器持续保活",
   "scripts": {
-    "login": "node login.js",
-    "export": "node export-cookie.js",
-    "session-export": "node session-export.js",
     "start": "node keepalive-browser.js"
   },
   "dependencies": {
-    "puppeteer": "^24.0.0"
+    "puppeteer-core": "^24.0.0"
   }
 }
