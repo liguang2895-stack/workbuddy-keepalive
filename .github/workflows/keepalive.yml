@@ -18,10 +18,11 @@
 name: WorkBuddy KeepAlive
 
 on:
+  push:
+    branches: [ master ]
   schedule:
-    # 每 5 分钟运行一次
     - cron: '*/5 * * * *'
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   keepalive:
@@ -31,15 +32,15 @@ jobs:
     # 月消耗: 288次 × 5秒 ≈ 24分钟 ✅ 完全够用
 
     steps:
-      - name: 检出代码
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 设置 Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: 执行保活请求
+      - name: Send keepalive request
         env:
           COOKIE_HEADER: ${{ secrets.COOKIE_HEADER }}
           TASK_ID: ${{ secrets.TASK_ID }}
