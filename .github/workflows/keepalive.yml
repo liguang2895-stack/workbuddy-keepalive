@@ -1,35 +1,35 @@
 # ============================================
 # WorkBuddy KeepAlive - GitHub Actions 工作流
 # ============================================
-# 每 5 分钟发送一次 HTTP 请求到 WorkBuddy 会话页面，
-# 保持服务器不因空闲而休眠。
+# 每 10 分钟启动一次 Chromium 浏览器，打开 WorkBuddy AI 对话页面，
+# 保持 WebSocket 连接活跃，防止服务器因空闲而休眠。
 #
-# 前置条件（首次使用）：
-#   1. 在本地运行 node login.js 完成微信扫码登录
-#   2. 运行 node export-cookie.js 导出 Cookie
-#   3. 将输出的内容添加到 GitHub Secrets：
-#      - Settings → Secrets → Actions → New secret
-#      - 名称: COOKIE_HEADER
-#        值: 粘贴 export-cookie.js 输出的内容
-#      - 名称: TASK_ID
-#        值: 你的会话数字 ID
+# 前置条件：
+#   1. 在本地运行 npm run login 完成微信扫码登录
+#   2. 运行 npm run session-export 导出会话数据
+#   3. 添加 GitHub Secrets：
+#      - SESSION_DATA: 粘贴 session-export 输出的内容
+#      - TASK_ID: 你的会话数字 ID
+#   4. 仓库已设为 Public（免费用户无限 Actions 分钟数）
 # ============================================
 
 name: WorkBuddy KeepAlive
 
 on:
-  push:
-    branches: [ master ]
   schedule:
-    - cron: '*/5 * * * *'
+    # 每 10 分钟运行一次（服务器 15 分钟才休眠，10 分钟间隔安全）
+    - cron: '*/10 * * * *'
   workflow_dispatch:
+
+# 防止多个并发运行（如果前一个还没结束，排队等）
+concurrency:
+  group: keepalive-browser
+  cancel-in-progress: false
 
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    # GitHub Free 计划：私有仓库每月 2000 分钟免费
-    # 每 5 分钟运行一次，每次约 5 秒
-    # 月消耗: 288次 × 5秒 ≈ 24分钟 ✅ 完全够用
+    timeout-minutes: 5  # 每次最多运行 5 分钟
 
     steps:
       - name: Checkout code
@@ -38,10 +38,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Send keepalive request
+      - name: Install Puppeteer
+        run: |
+          npm init -y
+          npm install puppeteer-core
+
+      - name: Run browser keepalive
         env:
-          COOKIE_HEADER: ${{ secrets.COOKIE_HEADER }}
+          SESSION_DATA: ${{ secrets.SESSION_DATA }}
           TASK_ID: ${{ secrets.TASK_ID }}
-        run: node keepalive-http.js
+        run: node keepalive-browser.js

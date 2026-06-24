@@ -4,8 +4,9 @@
   "description": "WorkBuddy 保活工具 - 保持 AI 对话服务器不会因空闲而休眠",
   "scripts": {
     "login": "node login.js",
-    "start": "node keepalive-http.js",
-    "export": "node export-cookie.js"
+    "export": "node export-cookie.js",
+    "session-export": "node session-export.js",
+    "start": "node keepalive-browser.js"
   },
   "dependencies": {
     "puppeteer": "^24.0.0"
