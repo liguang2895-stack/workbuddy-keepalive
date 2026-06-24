@@ -106,9 +106,33 @@ async function main() {
   const text = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '');
   console.log(`\n[5] 页面文本 (前1000字):\n${text}\n`);
 
-  // 6. 截图
-  console.log('[6] 截图...');
-  await page.screenshot({ path: 'diagnosis.png', fullPage: true });
+  // 6. 检查页面关键元素
+  console.log('[6] 检查页面元素...');
+  const pageInfo = await page.evaluate(() => {
+    const btn = document.querySelector('button, .btn, [class*="login"], [class*="button"]');
+    const input = document.querySelector('input, textarea, [contenteditable]');
+    const imgs = document.querySelectorAll('img').length;
+    const canvas = document.querySelectorAll('canvas').length;
+    return {
+      hasLoginBtn: btn ? btn.innerText?.substring(0, 30) : null,
+      hasInput: !!input,
+      imgCount: imgs,
+      canvasCount: canvas,
+      viewportW: window.innerWidth,
+      viewportH: window.innerHeight,
+      bodyChildren: document.body?.children?.length || 0,
+    };
+  });
+  console.log(`    按钮: ${pageInfo.hasLoginBtn || '无'}`);
+  console.log(`    输入框: ${pageInfo.hasInput}`);
+  console.log(`    图片: ${pageInfo.imgCount}, Canvas: ${pageInfo.canvasCount}`);
+  console.log(`    视口: ${pageInfo.viewportW}x${pageInfo.viewportH}`);
+
+  // 7. 截图（先设置窗口大小确保可见）
+  console.log('[7] 截图...');
+  await page.setViewport({ width: 1280, height: 800 });
+  await new Promise(r => setTimeout(r, 2000));
+  await page.screenshot({ path: 'diagnosis.png', fullPage: false });
   console.log('    已保存 diagnosis.png');
 
   // 7. 诊断结论
