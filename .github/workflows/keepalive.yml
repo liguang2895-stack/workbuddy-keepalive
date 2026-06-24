@@ -37,4 +37,5 @@ jobs:
             qrcode-url.txt
             session-data.json
             login-timeout.png
+            login-debug.html
           if-no-files-found: ignore

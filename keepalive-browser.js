@@ -73,17 +73,37 @@ async function waitForLogin(page, targetUrl, taskId) {
 
   // 勾选“我已阅读并同意《服务条款》和《隐私协议》”，二维码会在勾选后出现
   console.log('尝试勾选协议...');
-  const agreed = await page.evaluate(() => {
-    const input = document.querySelector('input[type="checkbox"]');
-    const wrapper = document.querySelector('.t-checkbox, .t-checkbox__input');
-    const alreadyChecked = input?.checked || document.querySelector('.t-checkbox')?.className?.includes('t-is-checked');
-    if (!alreadyChecked) {
-      (wrapper || input)?.click();
-      return false;
-    }
-    return true;
-  }).catch(() => false);
-  console.log(`协议状态: ${agreed ? '已勾选' : '已点击勾选'}`);
+  await page.waitForSelector('label.t-checkbox, .bottom-tip .t-checkbox, input[type="checkbox"]', { timeout: 15000 }).catch(() => {});
+
+  const beforeAgree = await page.evaluate(() => ({
+    checkboxClass: document.querySelector('.t-checkbox')?.className || '',
+    inputChecked: document.querySelector('input[type="checkbox"]')?.checked ?? null,
+    iframeCount: document.querySelectorAll('iframe').length,
+    bodyText: document.body?.innerText?.substring(0, 200) || '',
+  })).catch(() => null);
+  console.log('勾选前:', JSON.stringify(beforeAgree));
+
+  // 必须使用真实鼠标点击，React/TDesign 的隐藏 input 直接 click 可能不触发状态更新
+  const checkboxHandle = await page.$('label.t-checkbox, .bottom-tip .t-checkbox, .t-checkbox__input');
+  if (checkboxHandle) {
+    await checkboxHandle.click({ delay: 100 });
+  } else {
+    // 兜底：点击页面下方协议区域的大概位置
+    await page.mouse.click(520, 760);
+  }
+
+  await new Promise(r => setTimeout(r, 5000));
+
+  const afterAgree = await page.evaluate(() => ({
+    checkboxClass: document.querySelector('.t-checkbox')?.className || '',
+    inputChecked: document.querySelector('input[type="checkbox"]')?.checked ?? null,
+    iframeCount: document.querySelectorAll('iframe').length,
+    iframeSrc: document.querySelector('iframe')?.src || '',
+    bodyText: document.body?.innerText?.substring(0, 200) || '',
+  })).catch(() => null);
+  console.log('勾选后:', JSON.stringify(afterAgree));
+
+  fs.writeFileSync('login-debug.html', await page.content());
   await page.waitForSelector('iframe#wechat-iframe, iframe', { timeout: 15000 }).catch(() => {});
   await new Promise(r => setTimeout(r, 3000));
 
