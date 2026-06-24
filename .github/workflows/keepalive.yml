@@ -1,0 +1,46 @@
+# ============================================
+# WorkBuddy KeepAlive - GitHub Actions 工作流
+# ============================================
+# 每 5 分钟发送一次 HTTP 请求到 WorkBuddy 会话页面，
+# 保持服务器不因空闲而休眠。
+#
+# 前置条件（首次使用）：
+#   1. 在本地运行 node login.js 完成微信扫码登录
+#   2. 运行 node export-cookie.js 导出 Cookie
+#   3. 将输出的内容添加到 GitHub Secrets：
+#      - Settings → Secrets → Actions → New secret
+#      - 名称: COOKIE_HEADER
+#        值: 粘贴 export-cookie.js 输出的内容
+#      - 名称: TASK_ID
+#        值: 你的会话数字 ID
+# ============================================
+
+name: WorkBuddy KeepAlive
+
+on:
+  schedule:
+    # 每 5 分钟运行一次
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    # GitHub Free 计划：私有仓库每月 2000 分钟免费
+    # 每 5 分钟运行一次，每次约 5 秒
+    # 月消耗: 288次 × 5秒 ≈ 24分钟 ✅ 完全够用
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 执行保活请求
+        env:
+          COOKIE_HEADER: ${{ secrets.COOKIE_HEADER }}
+          TASK_ID: ${{ secrets.TASK_ID }}
+        run: node keepalive-http.js
