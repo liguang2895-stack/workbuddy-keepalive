@@ -57,6 +57,22 @@ async function waitForLogin(page, targetUrl, taskId) {
   console.log(`打开微信登录页: ${loginUrl}`);
   await page.goto(loginUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
+  // 勾选“我已阅读并同意《服务条款》和《隐私协议》”，二维码会在勾选后出现
+  console.log('尝试勾选协议...');
+  const agreed = await page.evaluate(() => {
+    const input = document.querySelector('input[type="checkbox"]');
+    const wrapper = document.querySelector('.t-checkbox, .t-checkbox__input');
+    const alreadyChecked = input?.checked || document.querySelector('.t-checkbox')?.className?.includes('t-is-checked');
+    if (!alreadyChecked) {
+      (wrapper || input)?.click();
+      return false;
+    }
+    return true;
+  }).catch(() => false);
+  console.log(`协议状态: ${agreed ? '已勾选' : '已点击勾选'}`);
+  await page.waitForSelector('iframe#wechat-iframe, iframe', { timeout: 15000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 3000));
+
   const startTime = Date.now();
   let printedQr = false;
 
