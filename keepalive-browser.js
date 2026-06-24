@@ -1,14 +1,15 @@
 /**
- * WorkBuddy 浏览器保活脚本（自循环版）
- * =====================================
- * 在 GitHub Actions 上长时间运行，每 10 分钟启动一次 Chrome 浏览器，
- * 打开 AI 对话页面保持 WebSocket 活跃，防止服务器休眠。
+ * WorkBuddy 浏览器保活脚本（持续在线版）
+ * ======================================
+ * 在 GitHub Actions 上保持一个浏览器窗口 24/7 在线，
+ * 维持 WebSocket 持续连接，防止服务器休眠。
  *
- * 模式：
- *   - 不需要 GitHub schedule 定时器
- *   - 脚本内部自循环：打开页面 → 保持 2 分钟 → 关闭 → 等 8 分钟 → 重复
- *   - 单个 GitHub Actions 运行最长 72 小时（公开仓库免费）
- *   - 如果挂了，手动点一次 Run workflow 即可再跑 72 小时
+ * 核心思路：
+ *   - 只打开一次浏览器，永不关闭
+ *   - 每 20 秒发送心跳（fetch + 键盘 + 鼠标）
+ *   - 保持 WebSocket 一直在线
+ *   - GitHub Actions 公开仓库单次最长 72 小时
+ *   - 69 小时时自动触发新的 workflow 接力
  */
 
 const puppeteer = require('puppeteer-core');
@@ -28,9 +29,8 @@ const CHROME_PATHS = [
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
 ];
 
-const CYCLE_INTERVAL_SEC = 10 * 60;  // 循环间隔 10 分钟
-const ACTIVE_SECONDS = 150;          // 每次保持页面活跃 2.5 分钟
-const HEARTBEAT_INTERVAL = 15;       // 每 15 秒发一次心跳
+const HEARTBEAT_INTERVAL_SEC = 20;  // 每 20 秒发一次心跳
+const HEALTH_CHECK_INTERVAL_SEC = 60; // 每 60 秒检查页面是否还活着
 
 // ============================================================
 // 加载配置
@@ -76,23 +76,88 @@ function findChrome() {
     const p = require('puppeteer-core').executablePath();
     if (fs.existsSync(p)) return p;
   } catch {}
-  // Ubuntu GitHub Actions 默认位置
   return '/usr/bin/google-chrome';
 }
 
 // ============================================================
-// 心跳循环（连接页面并保持活跃）
+// 心跳：模拟真实用户操作
 // ============================================================
-async function runKeepAliveCycle(cycleNum, config) {
+async function sendHeartbeat(page, beatNum) {
+  try {
+    // 1. 发 HTTP 请求保持会话
+    await page.evaluate(() =>
+      fetch(window.location.pathname, { method: 'HEAD' }).catch(() => {})
+    );
+
+    // 2. 模拟键盘输入（轻触 Shift 键）
+    await page.keyboard.press('Shift');
+
+    // 3. 模拟鼠标滚动或点击
+    await page.evaluate(() => {
+      window.scrollBy(0, 1);
+      window.scrollBy(0, -1);
+    });
+
+    const body = await page.$('body');
+    if (body) {
+      const box = await body.boundingBox();
+      if (box) {
+        await page.mouse.click(box.x + Math.random() * 50, box.y + Math.random() * 50);
+      }
+    }
+
+    const elapsed = Math.floor((Date.now() - GLOBAL_START) / 1000);
+    const elapsedMin = Math.floor(elapsed / 60);
+    process.stdout.write(`\r  心跳 #${beatNum} | 已运行 ${elapsedMin} 分 ${elapsed % 60} 秒  `);
+
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+// ============================================================
+// 检查页面健康状态
+// ============================================================
+async function checkPageHealth(page) {
+  try {
+    const url = page.url();
+    if (url.includes('login') || url.includes('auth')) {
+      console.error(`\n[健康检查] 页面跳转到登录页: ${url}`);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================
+// 全局变量
+// ============================================================
+let GLOBAL_START = Date.now();
+
+// ============================================================
+// 主函数
+// ============================================================
+async function main() {
+  console.log('================================================');
+  console.log('  WorkBuddy KeepAlive - 浏览器持续在线');
+  console.log('  浏览器永不关闭，24/7 保持 WebSocket 连接');
+  console.log('================================================\n');
+
+  const config = loadConfig();
   const targetUrl = config.taskId
     ? `${BASE_URL}/app/task/${config.taskId}`
     : `${BASE_URL}/app`;
 
-  console.log(`\n========== 第 ${cycleNum} 次保活 ==========`);
-  console.log(`[目标] ${targetUrl}`);
+  console.log(`[配置] 目标: ${targetUrl}`);
+  console.log(`[配置] cookies: ${config.cookies.length} 个`);
+  console.log(`[配置] taskId: ${config.taskId || '(未设置)'}`);
 
+  // 启动浏览器
   const chromePath = findChrome();
-  console.log(`[Chrome] ${chromePath}`);
+  console.log(`\n[启动] Chrome: ${chromePath}`);
 
   const browser = await puppeteer.launch({
     executablePath: chromePath,
@@ -106,13 +171,16 @@ async function runKeepAliveCycle(cycleNum, config) {
       '--mute-audio',
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
+      '--disable-ipc-flooding-protection',
     ],
   });
+
+  console.log('[启动] 浏览器已启动');
 
   try {
     const page = await browser.newPage();
 
-    // 拦截资源
+    // 拦截不必要的资源
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const type = req.resourceType();
@@ -128,21 +196,28 @@ async function runKeepAliveCycle(cycleNum, config) {
     const cdp = await page.target().createCDPSession();
     await cdp.send('Network.enable');
     cdp.on('Network.webSocketCreated', ({ url }) => {
-      wsConnected = true;
-      console.log(`[WebSocket] 已连接: ${url.substring(0, 60)}`);
+      if (!wsConnected) {
+        wsConnected = true;
+        console.log(`\n[WebSocket] 已连接: ${url.substring(0, 60)}`);
+      }
+    });
+    cdp.on('Network.webSocketClosed', () => {
+      wsConnected = false;
+      console.log(`\n[WebSocket] 连接已关闭 (${new Date().toISOString()})`);
     });
 
+    // 设置 User-Agent
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
       'AppleWebKit/537.36 (KHTML, like Gecko) ' +
       'Chrome/124.0.0.0 Safari/537.36'
     );
 
-    // 第一步：打开首页
+    // ===== 第一步：打开首页建立域名 =====
     console.log('[步骤1] 打开首页...');
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // 第二步：注入 cookies
+    // ===== 第二步：注入 cookies =====
     if (config.cookies.length > 0) {
       console.log('[步骤2] 注入 cookies...');
       const validCookies = config.cookies
@@ -154,108 +229,95 @@ async function runKeepAliveCycle(cycleNum, config) {
           sameSite: c.sameSite || 'Lax',
         }));
       await page.setCookie(...validCookies);
-      console.log(`  已注入 ${validCookies.length} 个`);
+      console.log(`  已注入 ${validCookies.length} 个 cookies`);
     }
 
-    // 第三步：打开目标页面
-    console.log('[步骤3] 打开任务页...');
+    // ===== 第三步：打开目标页面 =====
+    console.log('[步骤3] 打开目标页面...');
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // 第四步：注入 localStorage
+    // ===== 第四步：注入 localStorage =====
     if (Object.keys(config.localStorage).length > 0) {
       console.log('[步骤4] 注入 localStorage...');
       await page.evaluate((items) => {
-        for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v);
+        for (const [k, v] of Object.entries(items)) {
+          localStorage.setItem(k, v);
+        }
       }, config.localStorage);
       await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
     }
 
-    // 检查状态
+    // ===== 检查登录状态 =====
     const currentUrl = page.url();
-    console.log(`[状态] URL: ${currentUrl}`);
-    if (currentUrl.includes('login')) {
+    console.log(`\n[状态] 当前 URL: ${currentUrl}`);
+
+    if (currentUrl.includes('login') || currentUrl.includes('auth')) {
       throw new Error('会话已过期！请重新运行 login.js');
     }
 
-    // 等待 WebSocket
-    if (!wsConnected) {
-      console.log('[WebSocket] 等待连接...');
-      await new Promise(r => setTimeout(r, 8000));
+    if (currentUrl.includes('/task/')) {
+      const taskIdMatch = currentUrl.match(/\/task\/(\d+)/);
+      if (taskIdMatch) {
+        console.log(`[状态] 已进入会话页面 ✓ Task ID: ${taskIdMatch[1]}`);
+      }
     }
-    console.log(`[WebSocket] ${wsConnected ? '已连接 ✓' : '未检测到'}`);
 
-    // 第五步：保持活跃
-    console.log(`[步骤5] 保持活跃 ${ACTIVE_SECONDS} 秒...`);
-    const startTime = Date.now();
-    let beats = 0;
+    // 等待 WebSocket 建立
+    console.log('[WebSocket] 等待连接建立...');
+    await new Promise(r => setTimeout(r, 10000));
+    console.log(`[WebSocket] ${wsConnected ? '已连接 ✓' : '未检测到 WebSocket'}`);
 
-    while (Date.now() - startTime < ACTIVE_SECONDS * 1000) {
-      beats++;
-      try {
-        await page.evaluate(() =>
-          fetch(window.location.pathname, { method: 'HEAD' }).catch(() => {})
-        );
-        await page.keyboard.press('Shift');
-        const body = await page.$('body');
-        if (body) {
-          const box = await body.boundingBox();
-          if (box) await page.mouse.click(box.x + 10, box.y + 10);
+    // ===== 第五步：持续保活循环 =====
+    console.log('\n========================================');
+    console.log('  开始持续保活，永不关闭浏览器');
+    console.log('  每 20 秒发送一次心跳');
+    console.log('========================================\n');
+
+    let beatNum = 0;
+    let healthCheckCounter = 0;
+
+    while (true) {
+      // 心跳
+      beatNum++;
+      await sendHeartbeat(page, beatNum);
+
+      // 健康检查（每 60/20 = 3 次心跳检查一次）
+      healthCheckCounter++;
+      if (healthCheckCounter >= (HEALTH_CHECK_INTERVAL_SEC / HEARTBEAT_INTERVAL_SEC)) {
+        healthCheckCounter = 0;
+        const healthy = await checkPageHealth(page);
+        if (!healthy) {
+          console.error('\n[健康检查] 页面异常，尝试重新加载...');
+          try {
+            await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+            console.log('[健康检查] 页面已重新加载');
+          } catch (err) {
+            console.error(`[健康检查] 重新加载失败: ${err.message}`);
+          }
         }
-      } catch {}
 
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      process.stdout.write(`\r  心跳 #${beats} | +${elapsed}s  `);
+        // 检查 WebSocket 状态
+        if (!wsConnected) {
+          console.log(`[WebSocket] 已断开 (${new Date().toISOString()})`);
+          // 也许重新加载页面可以恢复
+          try {
+            await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
+            console.log('[WebSocket] 已重新加载页面，等待连接恢复...');
+            await new Promise(r => setTimeout(r, 8000));
+          } catch {}
+        }
 
-      // 动态等待：先快后慢
-      const waitTime = beats <= 3 ? 5000 : HEARTBEAT_INTERVAL * 1000;
-      await new Promise(r => setTimeout(r, waitTime));
+        // 打印运行时间
+        const totalMin = Math.floor((Date.now() - GLOBAL_START) / 60000);
+        console.log(`\n[状态] 运行 ${totalMin} 分钟 | 心跳 ${beatNum} 次 | WebSocket ${wsConnected ? '✓' : '✗'}`);
+      }
+
+      // 等待到下次心跳
+      await new Promise(r => setTimeout(r, HEARTBEAT_INTERVAL_SEC * 1000));
     }
-
-    console.log(`\n[完成] 保活历时 ${Math.floor((Date.now() - startTime) / 1000)} 秒`);
-    return true;
   } finally {
-    await browser.close();
-    console.log('[浏览器] 已关闭');
-  }
-}
-
-// ============================================================
-// 主循环
-// ============================================================
-async function main() {
-  console.log('================================================');
-  console.log('  WorkBuddy KeepAlive - 浏览器自循环保活');
-  console.log('  公开仓库: 单次运行最长 72 小时');
-  console.log('  循环: 每 10 分钟连接一次，活跃 2.5 分钟');
-  console.log('================================================\n');
-
-  const config = loadConfig();
-  console.log(`[配置] cookies: ${config.cookies.length} 个`);
-  console.log(`[配置] localStorage: ${Object.keys(config.localStorage).length} 条`);
-  console.log(`[配置] taskId: ${config.taskId || '(未设置)'}`);
-  console.log('');
-
-  let cycleNum = 0;
-  const startTime = Date.now();
-
-  while (true) {
-    cycleNum++;
-    const totalElapsed = Math.floor((Date.now() - startTime) / 60000);
-    console.log(`\n[总运行] ${totalElapsed} 分钟 | 已执行 ${cycleNum - 1} 次`);
-
-    try {
-      await runKeepAliveCycle(cycleNum, config);
-    } catch (err) {
-      console.error(`\n[错误] ${err.message}`);
-      // 错误后等待 30 秒重试
-      console.log('[等待] 30 秒后重试...');
-      await new Promise(r => setTimeout(r, 30000));
-    }
-
-    // 等待到下一个周期
-    const waitSec = CYCLE_INTERVAL_SEC - ACTIVE_SECONDS;
-    console.log(`\n[等待] ${waitSec} 秒后下一次保活...`);
-    await new Promise(r => setTimeout(r, waitSec * 1000));
+    console.log('\n[关闭] 浏览器已关闭');
+    await browser.close().catch(() => {});
   }
 }
 

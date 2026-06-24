@@ -1,30 +1,31 @@
 # ============================================
 # WorkBuddy KeepAlive - GitHub Actions 长期保活
 # ============================================
-# 原理：
-#   - 公开仓库单次 Actions 运行最长 72 小时
-#   - 脚本内部自循环：每 10 分钟打开浏览器保活一次
-#   - 中途不依赖 GitHub schedule（它不可靠）
-#   - 脚本运行 70 小时后自动触发新的 workflow_dispatch
-#     实现无缝接力，理论上可以永久运行
+# 核心原理：
+#   - 启动 Chromium 浏览器，打开 AI 对话页面
+#   - 浏览器永不关闭，持续保持 WebSocket 连接
+#   - 每 20 秒发送心跳（fetch + 键盘 + 鼠标）
+#   - 服务器检测到浏览器在线，就不会休眠
+#
+# 单次运行最长 72 小时（公开仓库上限）
+# 69 小时时自动触发新的 workflow 接力
+# 理论上可以永久运行，无需人工干预
 #
 # 首次使用：
 #   1. 仓库已设为 Public（免费无限 Actions 分钟数）
-#   2. 确保已添加 Secrets: SESSION_DATA, TASK_ID
-#   3. 进 Actions 标签页 → 点 Run workflow → 开始保活
+#   2. 已添加 Secrets: SESSION_DATA, TASK_ID
+#   3. 进 Actions 标签页 → Run workflow → 开始保活
 # ============================================
 
 name: WorkBuddy KeepAlive
 
 on:
-  push:
-    branches: [ master ]
   workflow_dispatch:
 
 jobs:
   keepalive:
     runs-on: ubuntu-latest
-    timeout-minutes: 4320  # 72 小时（公开仓库上限）
+    timeout-minutes: 4320  # 72 小时
 
     steps:
       - name: Checkout
@@ -35,24 +36,24 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Puppeteer + Chromium
+      - name: Install Chromium + Puppeteer
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq chromium-browser > /dev/null 2>&1
           npm init -y
           npm install puppeteer-core
 
-      - name: Start browser keepalive loop
+      - name: Start browser keepalive (runs until 72h limit)
         env:
           SESSION_DATA: ${{ secrets.SESSION_DATA }}
           TASK_ID: ${{ secrets.TASK_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # 在后台运行一个监视器，69 小时后触发自动重启
+          # 69 小时后自动触发新的 workflow 接力
           (
-            sleep 248400  # 69 小时 = 248400 秒
-            echo "--- 69 小时到，触发自动重启 ---"
+            sleep 248400
+            echo "--- 69h reached, auto-triggering next run ---"
             curl -s -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
