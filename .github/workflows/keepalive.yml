@@ -16,15 +16,15 @@ jobs:
       - name: Install Chromium
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq chromium-browser > /dev/null 2>&1
+          sudo apt-get install -y -qq chromium-browser xvfb > /dev/null 2>&1
           npm init -y
           npm install puppeteer-core
 
-      - name: Run diagnosis
+      - name: Run diagnosis (xvfb)
         env:
           SESSION_DATA: ${{ secrets.SESSION_DATA }}
           TASK_ID: ${{ secrets.TASK_ID }}
-        run: node diagnose.js
+        run: xvfb-run --auto-servernum node diagnose.js
 
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
@@ -36,7 +36,7 @@ jobs:
   keepalive:
     needs: diagnose
     runs-on: ubuntu-latest
-    timeout-minutes: 4320
+    timeout-minutes: 360
 
     steps:
       - uses: actions/checkout@v4
@@ -44,23 +44,17 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Chromium
+      - name: Install Chromium & xvfb
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq chromium-browser > /dev/null 2>&1
+          sudo apt-get install -y -qq chromium-browser xvfb > /dev/null 2>&1
           npm init -y
           npm install puppeteer-core
 
-      - name: Start keepalive
+      - name: Start keepalive (xvfb + non-headless)
         env:
           SESSION_DATA: ${{ secrets.SESSION_DATA }}
           TASK_ID: ${{ secrets.TASK_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          (sleep 248400; curl -s -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$GH_REPO/actions/workflows/keepalive.yml/dispatches" \
-            -d '{"ref":"master"}') &
-          node keepalive-browser.js
+        run: xvfb-run --auto-servernum node keepalive-browser.js
