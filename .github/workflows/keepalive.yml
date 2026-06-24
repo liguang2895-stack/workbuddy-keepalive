@@ -3,15 +3,28 @@ name: WorkBuddy KeepAlive
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   keepalive:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: 恢复上次登录态缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: session-data.json
+          key: workbuddy-session-${{ github.run_id }}
+          restore-keys: |
+            workbuddy-session-
 
       - name: Install Chromium & xvfb
         run: |
@@ -20,14 +33,19 @@ jobs:
           npm init -y
           npm install puppeteer-core
 
-      - name: 二维码登录 + 持续保活
+      - name: 二维码登录 / 恢复登录态 + 持续保活
         env:
           TASK_ID: ${{ secrets.TASK_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
         run: xvfb-run --auto-servernum node keepalive-browser.js
 
-      - name: 上传二维码和登录态（即使失败也上传）
+      - name: 保存登录态缓存
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: session-data.json
+          key: workbuddy-session-${{ github.run_id }}
+
+      - name: 上传二维码和登录态（调试用）
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -38,4 +56,18 @@ jobs:
             session-data.json
             login-timeout.png
             login-debug.html
+            trigger-next.txt
           if-no-files-found: ignore
+
+      - name: 触发下一轮保活
+        if: success() && hashFiles('trigger-next.txt') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$GH_REPO/actions/workflows/keepalive.yml/dispatches" \
+            -d '{"ref":"master"}'
+          echo "已触发下一轮 workflow"
