@@ -221,7 +221,7 @@ async function startKeepalive(page, targetUrl, taskId) {
   const text = await page.evaluate(() => document.body?.innerText?.substring(0, 300) || '');
   console.log(`页面内容: "${text.replace(/\n/g, ' ').substring(0, 120)}..."`);
 
-  const RENEW_INTERVAL = 5 * 60 * 1000;
+  const RENEW_INTERVAL = 5 * 60 * 60 * 1000;
   const HEARTBEAT_INTERVAL = 20000;
   let beatNum = 0;
 
