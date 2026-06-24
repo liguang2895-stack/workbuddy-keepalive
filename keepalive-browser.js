@@ -52,24 +52,36 @@ async function waitForLogin(page, targetUrl, taskId) {
   console.log('  阶段1: 等待微信扫码登录');
   console.log('========================================\n');
 
-  // 导航到目标页（会被重定向到登录页）
-  console.log(`导航到: ${targetUrl}`);
-  await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+  // 强制打开登录页，不能只访问 task 页；未登录时 task 页也可能保持原 URL，容易误判
+  const loginUrl = `${BASE_URL}/login/?platform=agents&state=0&redirect_uri=${encodeURIComponent(targetUrl)}`;
+  console.log(`打开微信登录页: ${loginUrl}`);
+  await page.goto(loginUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
   const startTime = Date.now();
+  let printedQr = false;
 
   while (Date.now() - startTime < LOGIN_TIMEOUT) {
-    // 检查是否已经登录成功（URL 包含 /task/）
     const currentUrl = page.url();
-    if (currentUrl.includes('/task/')) {
-      console.log(`\n✅ 检测到登录成功！`);
-      console.log(`   当前 URL: ${currentUrl}`);
+    const bodyText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
 
-      // 提取新鲜 cookies
+    // 真正登录成功的特征：左侧历史/用户名/对话内容出现，而不是仅仅 URL 是 /task/
+    const loggedIn = currentUrl.includes('/app/task/') && (
+      bodyText.includes('出其东门') ||
+      bodyText.includes('最近') ||
+      bodyText.includes('新建任务') ||
+      bodyText.includes('查看所有变更') ||
+      bodyText.includes('怎么打不开了') ||
+      bodyText.includes('已经恢复了')
+    );
+
+    if (loggedIn) {
+      console.log(`\n✅ 检测到真实登录成功！`);
+      console.log(`   当前 URL: ${currentUrl}`);
+      console.log(`   页面特征: ${bodyText.substring(0, 120).replace(/\n/g, ' ')}`);
+
       freshCookies = await page.cookies();
       console.log(`   已提取 ${freshCookies.length} 个 cookies`);
 
-      // 保存到文件
       const sessionData = {
         createdAt: new Date().toISOString(),
         cookies: freshCookies,
@@ -77,35 +89,39 @@ async function waitForLogin(page, targetUrl, taskId) {
       };
       fs.writeFileSync('session-data.json', JSON.stringify(sessionData, null, 2));
       console.log('   已保存 session-data.json');
-
       return true;
     }
 
-    // 截图二维码
-    const qrImg = await page.$('img[class*="qrcode"], .qrcode img, [class*="qrcode"] img');
-    if (qrImg) {
-      const src = await qrImg.evaluate(el => el.src);
-      // 打印二维码 URL 到日志（用户可立即看到）
-      const fullQrUrl = src.startsWith('http') ? src : `https://www.workbuddy.cn${src}`;
-      console.log(`\n========================================`);
-      console.log(`  请用微信扫描下方二维码登录`);
-      console.log(`  二维码 URL: ${fullQrUrl}`);
-      console.log(`  （如果无法直接扫描，请下载 qrcode.png artifact）`);
-      console.log(`========================================\n`);
-      // 保存二维码 URL 到文件
-      fs.writeFileSync('qrcode-url.txt', fullQrUrl);
+    // 从微信 iframe 中找二维码
+    if (!printedQr) {
+      let qrUrl = '';
+      for (const frame of page.frames()) {
+        const img = await frame.$('img.qrcode, img[class*="qrcode"], .qrcode img').catch(() => null);
+        if (img) {
+          const src = await img.evaluate(el => el.getAttribute('src') || el.src).catch(() => '');
+          if (src) {
+            const frameUrl = frame.url();
+            const origin = new URL(frameUrl).origin;
+            qrUrl = src.startsWith('http') ? src : `${origin}${src}`;
+            break;
+          }
+        }
+      }
 
-      // 截图保存二维码图片
-      try {
-        await page.screenshot({ path: 'qrcode.png', clip: await qrImg.boundingBox() });
-        console.log(`  二维码已截图保存到 qrcode.png`);
-      } catch (e) {
-        // 兜底: 截全屏
-        await page.screenshot({ path: 'qrcode.png' });
+      await page.screenshot({ path: 'qrcode.png', fullPage: false }).catch(() => {});
+
+      if (qrUrl) {
+        printedQr = true;
+        fs.writeFileSync('qrcode-url.txt', qrUrl);
+        console.log(`\n========================================`);
+        console.log(`  请用微信扫描二维码登录`);
+        console.log(`  二维码 URL: ${qrUrl}`);
+        console.log(`  复制 URL 到浏览器打开，或看日志截图 qrcode.png`);
+        console.log(`========================================\n`);
+      } else {
+        console.log(`[${new Date().toLocaleTimeString()}] 未找到二维码，继续等待... 当前URL: ${currentUrl}`);
       }
     } else {
-      // 如果没有找到二维码元素，截全屏
-      await page.screenshot({ path: 'qrcode.png' });
       process.stdout.write('.');
     }
 
@@ -223,39 +239,11 @@ async function main() {
   );
 
   // ===== 阶段1: 登录 =====
-  let loggedIn = false;
-  // 先尝试使用之前的 session-data.json（如果有）
-  if (fs.existsSync('session-data.json')) {
-    try {
-      const saved = JSON.parse(fs.readFileSync('session-data.json', 'utf-8'));
-      if (saved.cookies && saved.cookies.length > 0) {
-        console.log('[尝试] 使用已保存的 cookies 恢复登录...');
-        const valid = saved.cookies.map(c => ({
-          name: c.name, value: c.value,
-          domain: c.domain || '.workbuddy.cn', path: c.path || '/',
-          httpOnly: c.httpOnly ?? false, secure: c.secure ?? true,
-          sameSite: c.sameSite || 'Lax',
-        }));
-        await page.setCookie(...valid);
-        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        const url = page.url();
-        if (url.includes('/task/')) {
-          console.log('  ✅ 旧 cookies 仍有效，直接进入保活\n');
-          freshCookies = saved.cookies;
-          loggedIn = true;
-        } else {
-          console.log('  ⚠️ 旧 cookies 已过期，需要重新扫码\n');
-        }
-      }
-    } catch (e) {}
-  }
-
+  // 不再使用旧 cookies 自动判断，避免未登录页面 URL 仍是 /task/ 导致误判。
+  const loggedIn = await waitForLogin(page, targetUrl, taskId);
   if (!loggedIn) {
-    loggedIn = await waitForLogin(page, targetUrl, taskId);
-    if (!loggedIn) {
-      await browser.close();
-      process.exit(1);
-    }
+    await browser.close();
+    process.exit(1);
   }
 
   // ===== 阶段2: 保活 =====
