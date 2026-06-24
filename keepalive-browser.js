@@ -52,6 +52,20 @@ async function waitForLogin(page, targetUrl, taskId) {
   console.log('  阶段1: 等待微信扫码登录');
   console.log('========================================\n');
 
+  let capturedQrUrl = '';
+  page.on('request', (req) => {
+    const url = req.url();
+    if (url.includes('open.weixin.qq.com/connect/qrcode/')) {
+      capturedQrUrl = url;
+    }
+  });
+  page.on('response', (res) => {
+    const url = res.url();
+    if (url.includes('open.weixin.qq.com/connect/qrcode/')) {
+      capturedQrUrl = url;
+    }
+  });
+
   // 强制打开登录页，不能只访问 task 页；未登录时 task 页也可能保持原 URL，容易误判
   const loginUrl = `${BASE_URL}/login/?platform=agents&state=0&redirect_uri=${encodeURIComponent(targetUrl)}`;
   console.log(`打开微信登录页: ${loginUrl}`);
@@ -108,18 +122,24 @@ async function waitForLogin(page, targetUrl, taskId) {
       return true;
     }
 
-    // 从微信 iframe 中找二维码
+    // 从网络请求或微信 iframe 中找二维码
     if (!printedQr) {
-      let qrUrl = '';
-      for (const frame of page.frames()) {
-        const img = await frame.$('img.qrcode, img[class*="qrcode"], .qrcode img').catch(() => null);
-        if (img) {
-          const src = await img.evaluate(el => el.getAttribute('src') || el.src).catch(() => '');
-          if (src) {
-            const frameUrl = frame.url();
-            const origin = new URL(frameUrl).origin;
-            qrUrl = src.startsWith('http') ? src : `${origin}${src}`;
-            break;
+      let qrUrl = capturedQrUrl;
+
+      if (!qrUrl) {
+        for (const frame of page.frames()) {
+          const frameUrl = frame.url();
+          if (frameUrl.includes('open.weixin.qq.com/connect/qrconnect')) {
+            console.log(`微信 iframe: ${frameUrl.substring(0, 180)}...`);
+          }
+          const img = await frame.$('img.qrcode, img[class*="qrcode"], .qrcode img').catch(() => null);
+          if (img) {
+            const src = await img.evaluate(el => el.getAttribute('src') || el.src).catch(() => '');
+            if (src) {
+              const origin = new URL(frameUrl).origin;
+              qrUrl = src.startsWith('http') ? src : `${origin}${src}`;
+              break;
+            }
           }
         }
       }
@@ -132,10 +152,12 @@ async function waitForLogin(page, targetUrl, taskId) {
         console.log(`\n========================================`);
         console.log(`  请用微信扫描二维码登录`);
         console.log(`  二维码 URL: ${qrUrl}`);
-        console.log(`  复制 URL 到浏览器打开，或看日志截图 qrcode.png`);
+        console.log(`  打开这个 URL 就是二维码图片，可用微信扫码`);
         console.log(`========================================\n`);
       } else {
+        const frames = page.frames().map(f => f.url()).filter(Boolean).slice(0, 5);
         console.log(`[${new Date().toLocaleTimeString()}] 未找到二维码，继续等待... 当前URL: ${currentUrl}`);
+        console.log(`  frames: ${frames.join(' | ')}`);
       }
     } else {
       process.stdout.write('.');
