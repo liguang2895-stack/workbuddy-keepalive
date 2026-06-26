@@ -36,6 +36,9 @@ jobs:
       - name: 二维码登录 / 恢复登录态 + 持续保活
         env:
           TASK_ID: ${{ secrets.TASK_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GH_REF: ${{ github.ref_name }}
         run: xvfb-run --auto-servernum node keepalive-browser.js
 
       - name: 保存登录态缓存
@@ -57,10 +60,11 @@ jobs:
             login-timeout.png
             login-debug.html
             trigger-next.txt
+            trigger-fallback.txt
           if-no-files-found: ignore
 
       - name: 触发下一轮保活
-        if: success() && hashFiles('trigger-next.txt') != ''
+        if: success() && hashFiles('trigger-fallback.txt') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

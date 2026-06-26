@@ -4,7 +4,7 @@
  * 1. 优先从 session-data.json 恢复登录（由 GitHub Actions Cache 保存）
  * 2. 如果恢复失败，再展示微信二维码，用户扫码登录
  * 3. 登录成功后持续保活 5 小时
- * 4. 5 小时后正常退出，workflow 保存 session 并触发下一轮
+ * 4. 5 小时时先触发下一轮 workflow，本轮继续保活 15 分钟再退出
  */
 
 const puppeteer = require('puppeteer-core');
@@ -15,6 +15,9 @@ const SESSION_FILE = 'session-data.json';
 const CHROME_PATHS = ['/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium'];
 
 const GLOBAL_START = Date.now();
+const RENEW_INTERVAL = 5 * 60 * 60 * 1000;
+const OVERLAP_INTERVAL = 15 * 60 * 1000;
+const HEARTBEAT_INTERVAL = 20000;
 let wsConnected = false;
 
 function findChrome() {
@@ -200,6 +203,38 @@ async function waitForLogin(page, targetUrl, taskId) {
   return false;
 }
 
+async function triggerNextWorkflow() {
+  const token = process.env.GH_TOKEN;
+  const repo = process.env.GH_REPO;
+  const ref = process.env.GH_REF || 'master';
+
+  if (!token || !repo) {
+    console.log('[接力] 未提供 GH_TOKEN/GH_REPO，交给 workflow 结束步骤兜底触发');
+    fs.writeFileSync('trigger-fallback.txt', new Date().toISOString());
+    return false;
+  }
+
+  const url = `https://api.github.com/repos/${repo}/actions/workflows/keepalive.yml/dispatches`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'workbuddy-keepalive',
+    },
+    body: JSON.stringify({ ref }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`GitHub API ${res.status}: ${body}`);
+  }
+
+  fs.writeFileSync('trigger-next.txt', new Date().toISOString());
+  console.log('[接力] 已触发下一轮 workflow，本轮继续保活15分钟');
+  return true;
+}
+
 async function startKeepalive(page, targetUrl, taskId) {
   console.log('\n========================================');
   console.log('  阶段2: 开始持续保活');
@@ -221,11 +256,11 @@ async function startKeepalive(page, targetUrl, taskId) {
   const text = await page.evaluate(() => document.body?.innerText?.substring(0, 300) || '');
   console.log(`页面内容: "${text.replace(/\n/g, ' ').substring(0, 120)}..."`);
 
-  const RENEW_INTERVAL = 5 * 60 * 60 * 1000;
-  const HEARTBEAT_INTERVAL = 20000;
   let beatNum = 0;
+  let nextTriggered = false;
+  let overlapStartedAt = 0;
 
-  console.log('\n开始心跳保活 (每20秒)，5小时后退出并触发下一轮\n');
+  console.log('\n开始心跳保活 (每20秒)，5小时后先触发下一轮，本轮继续保活15分钟再退出\n');
 
   while (true) {
     beatNum++;
@@ -242,12 +277,25 @@ async function startKeepalive(page, targetUrl, taskId) {
       }
     } catch (e) {}
 
-    process.stdout.write(`\r  心跳 #${beatNum} | 运行 ${elapsedHr}h${elapsedMin}m | WS:${wsConnected ? '✓' : '✗'}`);
+    const overlapText = nextTriggered ? ` | 重叠 ${Math.floor((Date.now() - overlapStartedAt) / 60000)}m/15m` : '';
+    process.stdout.write(`\r  心跳 #${beatNum} | 运行 ${elapsedHr}h${elapsedMin}m | WS:${wsConnected ? '✓' : '✗'}${overlapText}`);
 
-    if (elapsedMs >= RENEW_INTERVAL) {
-      console.log('\n\n[接力] 已运行5小时，保存 session 并请求 workflow 触发下一轮...');
+    if (!nextTriggered && elapsedMs >= RENEW_INTERVAL) {
+      console.log('\n\n[接力] 已运行5小时，保存 session 并立即触发下一轮...');
       await saveSession(page, taskId).catch(() => {});
-      fs.writeFileSync('trigger-next.txt', new Date().toISOString());
+      try {
+        await triggerNextWorkflow();
+      } catch (e) {
+        console.log(`[接力] 触发下一轮失败: ${e.message}`);
+        fs.writeFileSync('trigger-fallback.txt', new Date().toISOString());
+      }
+      nextTriggered = true;
+      overlapStartedAt = Date.now();
+    }
+
+    if (nextTriggered && Date.now() - overlapStartedAt >= OVERLAP_INTERVAL) {
+      console.log('\n\n[接力] 重叠保活15分钟已完成，本轮退出');
+      await saveSession(page, taskId).catch(() => {});
       return;
     }
 
