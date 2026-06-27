@@ -9,6 +9,7 @@
 
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
+const { Buffer } = require('buffer');
 
 const BASE_URL = 'https://www.workbuddy.cn';
 const SESSION_FILE = 'session-data.json';
@@ -215,6 +216,10 @@ async function triggerNextWorkflow() {
   }
 
   const url = `https://api.github.com/repos/${repo}/actions/workflows/keepalive.yml/dispatches`;
+  const sessionDataB64 = fs.existsSync(SESSION_FILE)
+    ? Buffer.from(fs.readFileSync(SESSION_FILE, 'utf-8'), 'utf-8').toString('base64')
+    : '';
+
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -222,7 +227,10 @@ async function triggerNextWorkflow() {
       Accept: 'application/vnd.github.v3+json',
       'User-Agent': 'workbuddy-keepalive',
     },
-    body: JSON.stringify({ ref }),
+    body: JSON.stringify({
+      ref,
+      inputs: sessionDataB64 ? { session_data_b64: sessionDataB64 } : {},
+    }),
   });
 
   if (!res.ok) {

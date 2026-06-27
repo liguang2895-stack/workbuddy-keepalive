@@ -2,6 +2,11 @@ name: WorkBuddy KeepAlive
 
 on:
   workflow_dispatch:
+    inputs:
+      session_data_b64:
+        description: '上一轮传递的 session-data.json base64 内容'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -18,7 +23,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: 使用接力传入的登录态
+        if: ${{ inputs.session_data_b64 != '' }}
+        run: |
+          echo '${{ inputs.session_data_b64 }}' | base64 -d > session-data.json
+          echo "已使用上一轮传入的 session-data.json"
+
       - name: 恢复上次登录态缓存
+        if: ${{ inputs.session_data_b64 == '' }}
         uses: actions/cache/restore@v4
         with:
           path: session-data.json
@@ -36,7 +48,7 @@ jobs:
       - name: 二维码登录 / 恢复登录态 + 持续保活
         env:
           TASK_ID: ${{ secrets.TASK_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           GH_REF: ${{ github.ref_name }}
         run: xvfb-run --auto-servernum node keepalive-browser.js
@@ -66,12 +78,16 @@ jobs:
       - name: 触发下一轮保活
         if: success() && hashFiles('trigger-fallback.txt') != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          SESSION_INPUT=""
+          if [ -f session-data.json ]; then
+            SESSION_INPUT=$(base64 -w 0 session-data.json)
+          fi
           curl -s -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/$GH_REPO/actions/workflows/keepalive.yml/dispatches" \
-            -d '{"ref":"master"}'
+            -d "{\"ref\":\"master\",\"inputs\":{\"session_data_b64\":\"$SESSION_INPUT\"}}"
           echo "已触发下一轮 workflow"
