@@ -4,7 +4,7 @@
  * 1. 优先从 session-data.json 恢复登录（由 GitHub Actions Cache 保存）
  * 2. 如果恢复失败，再展示微信二维码，用户扫码登录
  * 3. 登录成功后持续保活 5 小时
- * 4. 5 小时时先触发下一轮 workflow，本轮继续保活 15 分钟再退出
+ * 4. 5 小时时先触发下一轮 workflow，本轮继续保活 3 分钟再退出
  */
 
 const puppeteer = require('puppeteer-core');
@@ -17,7 +17,7 @@ const CHROME_PATHS = ['/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/u
 
 const GLOBAL_START = Date.now();
 const RENEW_INTERVAL = 5 * 60 * 60 * 1000;
-const OVERLAP_INTERVAL = 15 * 60 * 1000;
+const OVERLAP_INTERVAL = 3 * 60 * 1000;
 const HEARTBEAT_INTERVAL = 20000;
 let wsConnected = false;
 
@@ -239,7 +239,7 @@ async function triggerNextWorkflow() {
   }
 
   fs.writeFileSync('trigger-next.txt', new Date().toISOString());
-  console.log('[接力] 已触发下一轮 workflow，本轮继续保活15分钟');
+  console.log('[接力] 已触发下一轮 workflow，本轮继续保活3分钟');
   return true;
 }
 
@@ -268,7 +268,7 @@ async function startKeepalive(page, targetUrl, taskId) {
   let nextTriggered = false;
   let overlapStartedAt = 0;
 
-  console.log('\n开始心跳保活 (每20秒)，5小时后先触发下一轮，本轮继续保活15分钟再退出\n');
+  console.log('\n开始心跳保活 (每20秒)，5小时后先触发下一轮，本轮继续保活3分钟再退出\n');
 
   while (true) {
     beatNum++;
@@ -285,7 +285,7 @@ async function startKeepalive(page, targetUrl, taskId) {
       }
     } catch (e) {}
 
-    const overlapText = nextTriggered ? ` | 重叠 ${Math.floor((Date.now() - overlapStartedAt) / 60000)}m/15m` : '';
+    const overlapText = nextTriggered ? ` | 重叠 ${Math.floor((Date.now() - overlapStartedAt) / 60000)}m/3m` : '';
     process.stdout.write(`\r  心跳 #${beatNum} | 运行 ${elapsedHr}h${elapsedMin}m | WS:${wsConnected ? '✓' : '✗'}${overlapText}`);
 
     if (!nextTriggered && elapsedMs >= RENEW_INTERVAL) {
@@ -302,7 +302,7 @@ async function startKeepalive(page, targetUrl, taskId) {
     }
 
     if (nextTriggered && Date.now() - overlapStartedAt >= OVERLAP_INTERVAL) {
-      console.log('\n\n[接力] 重叠保活15分钟已完成，本轮退出');
+      console.log('\n\n[接力] 重叠保活3分钟已完成，本轮退出');
       await saveSession(page, taskId).catch(() => {});
       return;
     }
